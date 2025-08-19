@@ -1,0 +1,3 @@
+[submodule "nodes"]
+	path = nodes
+	url = https://github.com/chainmapsxyz-design/nodes.git
