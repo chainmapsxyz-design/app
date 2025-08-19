@@ -2,3 +2,4 @@
 	path = nodes
 	url = https://github.com/chainmapsxyz-design/nodes.git
 	branch = main
+	ignore = dirty
