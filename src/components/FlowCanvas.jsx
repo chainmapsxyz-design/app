@@ -10,7 +10,7 @@ import {
   ConnectionLineType,
 } from "@xyflow/react";
 import Sidebar from "./Sidebar";
-import { nodeTypes, nodePalette } from "@nodes/frontend/index.js";
+import { nodeTypes, nodePalette, getNodeMeta } from "@nodes/frontend/index.js";
 import { canAddNode } from "../graphs/nodeLimits";
 import ContextNodeMenu from "./ContextNodeMenu";
 import NodeInspector from "../inspector/NodeInspector";
@@ -100,6 +100,61 @@ function updateFormatterParamsForTargets(targetIds, nodes, edges, setNodes) {
       };
     })
   );
+}
+
+/* =========================
+   NEW: Per-handle connection caps from node meta
+   ========================= */
+
+/** Count existing edges targeting a specific node+handle. */
+function countIncomingToHandle({ edges, targetId, targetHandle }) {
+  const h = targetHandle ?? null;
+  return edges.filter(
+    (e) => e.target === targetId && (e.targetHandle ?? null) === h
+  ).length;
+}
+
+/** Look up the input spec for the target handle from node meta. */
+function getTargetInputSpec({ nodes, targetId, targetHandle }) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const targetNode = byId.get(targetId);
+  if (!targetNode) return null;
+
+  const meta = getNodeMeta(targetNode.type);
+  if (!meta || !Array.isArray(meta.inputs)) return null;
+
+  const key = targetHandle ?? "in";
+  return meta.inputs.find((inp) => inp.key === key) || null;
+}
+
+/** Validate whether a connection respects maxConnections on the target handle. */
+function canConnectEdge({ nodes, edges, params }) {
+  const spec = getTargetInputSpec({
+    nodes,
+    targetId: params.target,
+    targetHandle: params.targetHandle,
+  });
+  if (!spec) return { ok: true }; // no declared spec → allow
+
+  const max = Number(spec.maxConnections);
+  if (!Number.isFinite(max) || max <= 0) return { ok: true }; // no cap
+
+  const current = countIncomingToHandle({
+    edges,
+    targetId: params.target,
+    targetHandle: params.targetHandle ?? null,
+  });
+
+  if (current >= max) {
+    const label = spec.label || spec.key || "input";
+    return {
+      ok: false,
+      reason: `Limit: “${label}” accepts only ${max} connection${
+        max === 1 ? "" : "s"
+      }.`,
+    };
+  }
+  return { ok: true };
 }
 
 export default function FlowCanvas(props) {
@@ -277,10 +332,15 @@ export default function FlowCanvas(props) {
     [setEdges, setNodes, nodes]
   );
 
-  // UPDATED: onConnect — immediately update the destination formatter
+  // UPDATED: onConnect — enforce per-handle caps before adding an edge
   const onConnect = useCallback(
     (params) =>
       setEdges((es) => {
+        const check = canConnectEdge({ nodes, edges: es, params });
+        if (!check.ok) {
+          window?.alert?.(check.reason);
+          return es; // block
+        }
         const next = addEdge(
           { ...params, type: ConnectionLineType.Bezier },
           es
@@ -384,6 +444,11 @@ export default function FlowCanvas(props) {
             setSelectedNodeId(selNodes?.[0]?.id || null);
           }}
           onMove={closeContextMenu}
+          // NEW: live validation while dragging connections
+          isValidConnection={(params) => {
+            const check = canConnectEdge({ nodes, edges, params });
+            return check.ok;
+          }}
         />
         {menu.open && (
           <ContextNodeMenu

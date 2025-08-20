@@ -1,8 +1,7 @@
-// Simple, reusable caps per node type.
-export const NODE_LIMITS = {
-    ContractEvent: 1,
-    // Formatter: 1,  // example for later
-};
+// src/graphs/nodeLimits.js
+// Graph-level node count caps, sourced directly from node meta.
+
+import { getNodeMeta } from "@nodes/frontend/index.js";
 
 export function countByType(nodes = []) {
     return nodes.reduce((acc, n) => {
@@ -11,8 +10,16 @@ export function countByType(nodes = []) {
     }, {});
 }
 
+export function getMaxPerGraph(type) {
+    const meta = getNodeMeta(type);
+    if (meta && Number.isFinite(meta.maxPerGraph)) {
+        return meta.maxPerGraph;
+    }
+    return null;
+}
+
 export function canAddNode(type, nodes = []) {
-    const limit = NODE_LIMITS[type];
+    const limit = getMaxPerGraph(type);
     if (!limit) return { ok: true };
 
     const counts = countByType(nodes);
