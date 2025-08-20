@@ -86,7 +86,7 @@ export default function Sidebar({
           </button>
         </div>
         <InfoRow label="Deployed" value={compiledAt} />
-        <InfoRow label="Version" value={String(version)} />
+        {/* <InfoRow label="Version" value={String(version)} /> */}
 
         <div
           style={{

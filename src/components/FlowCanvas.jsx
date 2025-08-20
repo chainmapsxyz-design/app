@@ -15,6 +15,93 @@ import { canAddNode } from "../graphs/nodeLimits";
 import ContextNodeMenu from "./ContextNodeMenu";
 import NodeInspector from "../inspector/NodeInspector";
 
+/* =========================
+   Helpers for Formatter vars
+   ========================= */
+
+function inferTypeFromValue(v) {
+  if (v === null) return "null";
+  if (Array.isArray(v)) return "array";
+  const t = typeof v;
+  if (t === "object") return "object";
+  return t; // "string" | "number" | "boolean" | "undefined"
+}
+
+/**
+ * Build the list of parameters for a target node based on incoming edges.
+ * Uses source handle id as the parameter name (falls back to "value").
+ * Uses source node.type as the src identifier.
+ */
+function buildAvailableParams({ nodes, edges, targetId }) {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  const incoming = edges.filter((e) => e.target === targetId);
+
+  const params = [];
+  for (const e of incoming) {
+    const srcNode = byId.get(e.source);
+    if (!srcNode) continue;
+
+    const name = e.sourceHandle || "value";
+    const src = srcNode.type || "unknown";
+
+    // Try to infer type/preview from node.data[handle]
+    const preview = srcNode?.data?.[name];
+    const type = inferTypeFromValue(preview) || "any";
+
+    params.push({
+      name, // e.g. "value", "amount"
+      type, // "number" | "string" | ...
+      src, // e.g. "core.constant" | "ethereum.listener"
+      nodeId: srcNode.id,
+      preview,
+    });
+  }
+
+  return params;
+}
+
+/**
+ * Patch formatter nodes' data.availableParams for the given target ids.
+ */
+function updateFormatterParamsForTargets(targetIds, nodes, edges, setNodes) {
+  if (!targetIds || targetIds.length === 0) return;
+  const targetSet = new Set(targetIds);
+
+  setNodes((prev) =>
+    prev.map((n) => {
+      if (!targetSet.has(n.id)) return n;
+      if (n.type !== "core.formatter") return n;
+
+      const availableParams = buildAvailableParams({
+        nodes: prev,
+        edges,
+        targetId: n.id,
+      });
+
+      // Only write if changed (cheap shallow check)
+      const old = n.data?.availableParams || [];
+      const sameLen = old.length === availableParams.length;
+      const maybeSame =
+        sameLen &&
+        old.every((o, i) => {
+          const p = availableParams[i];
+          return (
+            o.name === p.name &&
+            o.type === p.type &&
+            o.src === p.src &&
+            o.nodeId === p.nodeId
+          );
+        });
+      if (maybeSame) return n;
+
+      return {
+        ...n,
+        data: { ...(n.data || {}), availableParams },
+      };
+    })
+  );
+}
+
 export default function FlowCanvas(props) {
   const {
     nodes,
@@ -158,16 +245,50 @@ export default function FlowCanvas(props) {
     ]
   );
 
+  // UPDATED: onEdgesChange — recompute formatter params for affected targets
   const onEdgesChange = useCallback(
-    (changes) => setEdges((es) => applyEdgeChanges(changes, es)),
-    [setEdges]
+    (changes) => {
+      setEdges((es) => {
+        const next = applyEdgeChanges(changes, es);
+
+        const affectedTargets = new Set();
+        for (const ch of changes) {
+          // remove: find previous edge by id in `es`
+          if (ch.type === "remove") {
+            const removed = es.find((e) => e.id === ch.id);
+            if (removed?.target) affectedTargets.add(removed.target);
+          }
+          // updates with item.target
+          if (ch.item?.target) affectedTargets.add(ch.item.target);
+        }
+
+        if (affectedTargets.size > 0) {
+          updateFormatterParamsForTargets(
+            Array.from(affectedTargets),
+            nodes,
+            next,
+            setNodes
+          );
+        }
+
+        return next;
+      });
+    },
+    [setEdges, setNodes, nodes]
   );
+
+  // UPDATED: onConnect — immediately update the destination formatter
   const onConnect = useCallback(
     (params) =>
-      setEdges((es) =>
-        addEdge({ ...params, type: ConnectionLineType.Bezier }, es)
-      ),
-    [setEdges]
+      setEdges((es) => {
+        const next = addEdge(
+          { ...params, type: ConnectionLineType.Bezier },
+          es
+        );
+        updateFormatterParamsForTargets([params.target], nodes, next, setNodes);
+        return next;
+      }),
+    [setEdges, setNodes, nodes]
   );
 
   const centerPos = () => {
@@ -213,6 +334,18 @@ export default function FlowCanvas(props) {
     }
   }
 
+  // One-time sync after a graph loads (covers pre-existing edges)
+  useEffect(() => {
+    const formatterIds = nodes
+      .filter((n) => n.type === "core.formatter")
+      .map((n) => n.id);
+    if (formatterIds.length) {
+      updateFormatterParamsForTargets(formatterIds, nodes, edges, setNodes);
+    }
+    // Run when a new graph is selected/loaded
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedGraph]);
+
   return (
     <div style={{ display: "flex", width: "100%", height: "100%" }}>
       <Sidebar
@@ -240,7 +373,6 @@ export default function FlowCanvas(props) {
           minZoom={0.2}
           connectionLineType={ConnectionLineType.Bezier}
           defaultEdgeOptions={{ type: ConnectionLineType.Bezier }}
-          fitView
           snapToGrid
           snapGrid={[25, 25]}
           onPaneContextMenu={openContextMenu}

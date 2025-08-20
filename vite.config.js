@@ -8,6 +8,7 @@ export default defineConfig({
   resolve: {
     alias: {
       "@nodes": fileURLToPath(new URL("./nodes", import.meta.url)),
+      "@app": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
 })
